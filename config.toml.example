@@ -116,6 +116,8 @@ working_dir = "/home/agent"
 # command = "grok"
 # args = ["agent", "stdio"]
 # working_dir = "/home/agent"
+# # Optional static default (also used as initial /models selection):
+# # model = "grok-build"
 # # Auth options:
 # #   1. API key:        env = { GROK_CODE_XAI_API_KEY = "${XAI_API_KEY}" }
 # #   2. Device-code:    kubectl exec -it <pod> -- grok login --device-auth

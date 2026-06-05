@@ -364,6 +364,12 @@ pub struct AgentConfig {
     pub env: HashMap<String, String>,
     #[serde(default)]
     pub inherit_env: Vec<String>,
+    /// Optional model override. For grok agents, this will be passed as
+    /// `--model <value>` when spawning the agent process. Also used to
+    /// populate synthetic config options for /models when the backend does
+    /// not provide them natively.
+    #[serde(default)]
+    pub model: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

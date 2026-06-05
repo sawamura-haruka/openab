@@ -1,5 +1,5 @@
 use crate::acp::connection::AcpConnection;
-use crate::acp::protocol::ConfigOption;
+use crate::acp::protocol::{ConfigOption, ConfigOptionValue};
 use crate::config::AgentConfig;
 use anyhow::{anyhow, Result};
 use std::collections::HashMap;
@@ -35,6 +35,8 @@ pub struct SessionPool {
     config: AgentConfig,
     max_sessions: usize,
     mapping_path: PathBuf,
+    /// Runtime model override (from /models or config). Takes precedence for grok agents.
+    runtime_model: std::sync::RwLock<Option<String>>,
 }
 
 type EvictionCandidate = (String, Arc<Mutex<AcpConnection>>, Instant, Option<String>);
@@ -80,6 +82,7 @@ impl SessionPool {
             config,
             max_sessions,
             mapping_path,
+            runtime_model: std::sync::RwLock::new(None),
         }
     }
 
@@ -171,9 +174,10 @@ impl SessionPool {
 
         // Build the replacement connection outside the state lock so one stuck
         // initialization does not block all unrelated sessions.
+        let effective_args = self.build_effective_args();
         let mut new_conn = AcpConnection::spawn(
             &self.config.command,
-            &self.config.args,
+            &effective_args,
             &self.config.working_dir,
             &self.config.env,
             &self.config.inherit_env,
@@ -301,15 +305,68 @@ impl SessionPool {
     }
 
     /// Get cached configOptions for a session (e.g. available models).
+    /// Build the final args for spawning the agent, injecting model for grok if configured.
+    /// This allows [agent].model in config.toml to work for grok agents, and enables
+    /// runtime model switching via /models by updating config.model then respawning.
+    fn build_effective_args(&self) -> Vec<String> {
+        let mut args = self.config.args.clone();
+        let effective_model = self.runtime_model.read().unwrap().clone()
+            .or_else(|| self.config.model.clone());
+        if let Some(ref m) = effective_model {
+            let cmd = &self.config.command;
+            if cmd.contains("grok") {
+                // Avoid duplicate if user already put --model in args
+                let has_model = args.iter().any(|a| a == "--model" || a == "-m");
+                if !has_model {
+                    args.push("--model".to_string());
+                    args.push(m.clone());
+                }
+            }
+        }
+        args
+    }
+
     pub async fn get_config_options(&self, thread_id: &str) -> Vec<ConfigOption> {
         let state = self.state.read().await;
-        let conn = match state.active.get(thread_id) {
-            Some(c) => c.clone(),
-            None => return Vec::new(),
-        };
+        let conn_opt = state.active.get(thread_id).cloned();
         drop(state);
-        let conn = conn.lock().await;
-        conn.config_options.clone()
+
+        let mut opts = if let Some(conn) = conn_opt {
+            let conn = conn.lock().await;
+            conn.config_options.clone()
+        } else {
+            Vec::new()
+        };
+
+        // If no options from backend and this is a grok agent, provide synthetic ones
+        // so /models works in Discord even if grok agent stdio doesn't expose configOptions.
+        // This works even before any message (no active conn yet).
+        if opts.is_empty() && self.config.command.contains("grok") {
+            let current = self.runtime_model.read().unwrap().clone()
+                .or_else(|| self.config.model.clone())
+                .unwrap_or_else(|| "grok-build".to_string());
+            opts = self.synthetic_grok_model_options(&current);
+        }
+        opts
+    }
+
+    /// Hardcoded but realistic model list for Grok (matches what `grok models` returns
+    /// in our environment). Used for /models UI and runtime switching when the native
+    /// grok ACP backend does not provide configOptions.
+    fn synthetic_grok_model_options(&self, current: &str) -> Vec<ConfigOption> {
+        let values = vec![
+            ConfigOptionValue { value: "grok-build".to_string(), name: "Grok Build".to_string(), description: Some("Best for advanced coding tasks".to_string()) },
+            ConfigOptionValue { value: "grok-composer-2.5-fast".to_string(), name: "Composer 2.5".to_string(), description: Some("Cursor's latest coding model".to_string()) },
+        ];
+        vec![ConfigOption {
+            id: "model".to_string(),
+            name: "Model".to_string(),
+            description: Some("AI model selection for this Grok agent".to_string()),
+            category: Some("model".to_string()),
+            option_type: "enum".to_string(),
+            current_value: current.to_string(),
+            options: values,
+        }]
     }
 
     /// Set a config option (e.g. model) via ACP and return updated options.
@@ -319,6 +376,28 @@ impl SessionPool {
         config_id: &str,
         value: &str,
     ) -> Result<Vec<ConfigOption>> {
+        if config_id == "model" {
+            // Special handling for grok: update runtime model so future spawns use it.
+            // Then evict the connection for this thread so it respawns with the new model
+            // on next prompt (via get_or_create).
+            {
+                let mut rm = self.runtime_model.write().unwrap();
+                *rm = Some(value.to_string());
+            }
+            // Evict so next use recreates with injected --model
+            {
+                let mut state = self.state.write().await;
+                if let Some(conn) = state.active.remove(thread_id) {
+                    // Drop will clean up the child process
+                    drop(conn);
+                }
+                state.suspended.remove(thread_id);
+                state.cancel_handles.remove(thread_id);
+            }
+            // Return synthetic options immediately
+            return Ok(self.synthetic_grok_model_options(value));
+        }
+
         let conn = {
             let state = self.state.read().await;
             state

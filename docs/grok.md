@@ -97,7 +97,8 @@ The default model is whichever Grok Build CLI selects (currently `grok-code-fast
 ```toml
 [agent]
 command = "grok"
-args = ["agent", "stdio", "--model", "grok-4.3"]
+# --model is a global grok flag (before subcommands), not a subcommand arg:
+args = ["--model", "grok-4.3", "agent", "stdio"]
 working_dir = "/home/agent"
 ```
 
@@ -109,7 +110,7 @@ kubectl exec -it <pod> -- grok models
 
 ### Discord `/models`
 
-On Discord, use the `/models` slash command to switch models at runtime (per thread session). Grok's ACP backend does not emit `configOptions` natively; OpenAB supplies a synthetic model menu and respawns the agent with `--model <id>` when you pick a new option. You can also set a static default via `[agent].model` in `config.toml` or `args` (see above).
+On Discord, use the `/models` slash command to switch models at runtime (per thread session). Grok's ACP backend does not emit `configOptions` natively; OpenAB supplies a synthetic model menu and respawns the agent with global `--model <id>` prepended to args (`grok --model <id> agent stdio`) when you pick a new option. You can also set a static default via `[agent].model` in `config.toml` (recommended) or explicit `args` (see above).
 
 ## Updating
 

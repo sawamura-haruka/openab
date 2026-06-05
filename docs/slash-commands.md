@@ -36,6 +36,7 @@ When the user picks an option, OpenAB sends `session/set_config_option` to the A
 | Agent | `/models` | `/agents` |
 |-------|-----------|-----------|
 | kiro-cli | ✅ Returns available models via `models` fallback | ✅ Returns modes (`kiro_default`, `kiro_planner`) via `modes` fallback |
+| grok (`grok agent stdio`) | ✅ Synthetic options when backend omits `configOptions`; respawns with `--model` on switch | ❌ |
 | claude-code | ❌ No `configOptions` emitted | ❌ |
 | codex | ❌ | ❌ |
 | gemini | ❌ | ❌ |

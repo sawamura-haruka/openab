@@ -107,6 +107,10 @@ List available models inside the pod:
 kubectl exec -it <pod> -- grok models
 ```
 
+### Discord `/models`
+
+On Discord, use the `/models` slash command to switch models at runtime (per thread session). Grok's ACP backend does not emit `configOptions` natively; OpenAB supplies a synthetic model menu and respawns the agent with `--model <id>` when you pick a new option. You can also set a static default via `[agent].model` in `config.toml` or `args` (see above).
+
 ## Updating
 
 ```bash

@@ -62,6 +62,24 @@ fn get_or_insert_gate(map: &mut HashMap<String, Arc<Mutex<()>>>, key: &str) -> A
         .clone()
 }
 
+/// Append `--model <id>` to grok agent args when not already present.
+/// Grok expects `grok agent stdio --model <id>` (flags after subcommand).
+pub(crate) fn append_grok_model_args(
+    mut args: Vec<String>,
+    command: &str,
+    model: &str,
+) -> Vec<String> {
+    if !command.contains("grok") {
+        return args;
+    }
+    let has_model = args.iter().any(|a| a == "--model" || a == "-m");
+    if !has_model {
+        args.push("--model".to_string());
+        args.push(model.to_string());
+    }
+    args
+}
+
 impl SessionPool {
     pub fn new(config: AgentConfig, max_sessions: usize) -> Self {
         let openab_dir = std::env::var("HOME")
@@ -313,15 +331,7 @@ impl SessionPool {
         let effective_model = self.runtime_model.read().unwrap().clone()
             .or_else(|| self.config.model.clone());
         if let Some(ref m) = effective_model {
-            let cmd = &self.config.command;
-            if cmd.contains("grok") {
-                // Avoid duplicate if user already put --model in args
-                let has_model = args.iter().any(|a| a == "--model" || a == "-m");
-                if !has_model {
-                    args.push("--model".to_string());
-                    args.push(m.clone());
-                }
-            }
+            args = append_grok_model_args(args, &self.config.command, m);
         }
         args
     }
@@ -556,7 +566,7 @@ impl SessionPool {
 
 #[cfg(test)]
 mod tests {
-    use super::{get_or_insert_gate, remove_if_same_handle};
+    use super::{append_grok_model_args, get_or_insert_gate, remove_if_same_handle};
     use std::collections::HashMap;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -594,6 +604,38 @@ mod tests {
 
         assert!(Arc::ptr_eq(&first, &second));
         assert_eq!(map.len(), 1);
+    }
+
+    #[test]
+    fn append_grok_model_args_appends_after_subcommand() {
+        let args = vec!["agent".into(), "stdio".into()];
+        let out = append_grok_model_args(args, "grok", "grok-build");
+        assert_eq!(
+            out,
+            vec!["agent", "stdio", "--model", "grok-build"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn append_grok_model_args_skips_when_already_present() {
+        let args = vec![
+            "agent".into(),
+            "stdio".into(),
+            "--model".into(),
+            "grok-4.3".into(),
+        ];
+        let out = append_grok_model_args(args.clone(), "grok", "grok-build");
+        assert_eq!(out, args);
+    }
+
+    #[test]
+    fn append_grok_model_args_ignores_non_grok_command() {
+        let args = vec!["acp".into()];
+        let out = append_grok_model_args(args.clone(), "kiro-cli", "some-model");
+        assert_eq!(out, args);
     }
 
     #[test]
